@@ -1,35 +1,98 @@
 
+import { db } from '../db';
+import { mTableTable } from '../db/schema';
 import { type CreateTableDefinitionInput, type MTable } from '../schema';
 
 export async function createTableDefinition(input: CreateTableDefinitionInput): Promise<MTable> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to:
-    // 1. Parse the shorthand definition and generate PostgreSQL CREATE TABLE statement
-    // 2. Store the table definition with generated SQL in the mTable database
-    // 3. Return the created record
-    
+  try {
     const generatedSql = generateSqlFromShorthand(input.name, input.shorthand_definition);
     
-    return Promise.resolve({
-        id: 0, // Placeholder ID
+    const result = await db.insert(mTableTable)
+      .values({
         name: input.name,
         shorthand_definition: input.shorthand_definition,
-        generated_sql: generatedSql,
-        created_at: new Date()
-    } as MTable);
+        generated_sql: generatedSql
+      })
+      .returning()
+      .execute();
+
+    return result[0];
+  } catch (error) {
+    console.error('Table definition creation failed:', error);
+    throw error;
+  }
 }
 
 function generateSqlFromShorthand(tableName: string, shorthand: string): string {
-    // This is a placeholder implementation! Real shorthand parsing should be implemented here.
-    // The goal is to parse shorthand notation and convert to PostgreSQL CREATE TABLE statement:
-    // - "id": INTEGER PRIMARY KEY with auto-increment
-    // - "t": TEXT NOT NULL DEFAULT ''
-    // - "tn": TEXT NULL
-    // - "d 'value'": sets default value
-    // - "i": INT NOT NULL DEFAULT 0
-    // - "in": INT NULL
-    // - "tz": TIMESTAMPTZ NULL
-    // - "tzn": TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  const columns: string[] = [];
+  
+  // Split shorthand by commas and process each column definition
+  const columnDefs = shorthand.split(',').map(def => def.trim()).filter(def => def.length > 0);
+  
+  for (const columnDef of columnDefs) {
+    const column = parseColumnDefinition(columnDef);
+    columns.push(column);
+  }
+  
+  // If no columns defined or no id column, add default id column
+  const hasIdColumn = columns.some(col => col.includes('id ') || col.startsWith('id '));
+  if (!hasIdColumn) {
+    columns.unshift('  id SERIAL PRIMARY KEY');
+  }
+  
+  return `CREATE TABLE ${tableName} (\n${columns.join(',\n')}\n);`;
+}
+
+function parseColumnDefinition(def: string): string {
+  const parts = def.split(' ').filter(part => part.length > 0);
+  if (parts.length === 0) return '';
+  
+  const columnName = parts[0];
+  const typeAndModifiers = parts.slice(1).join(' ');
+  
+  // Handle special shorthand types
+  if (typeAndModifiers === 'id') {
+    return `  ${columnName} SERIAL PRIMARY KEY`;
+  }
+  
+  if (typeAndModifiers === 't') {
+    return `  ${columnName} TEXT NOT NULL DEFAULT ''`;
+  }
+  
+  if (typeAndModifiers === 'tn') {
+    return `  ${columnName} TEXT NULL`;
+  }
+  
+  if (typeAndModifiers === 'i') {
+    return `  ${columnName} INT NOT NULL DEFAULT 0`;
+  }
+  
+  if (typeAndModifiers === 'in') {
+    return `  ${columnName} INT NULL`;
+  }
+  
+  if (typeAndModifiers === 'tz') {
+    return `  ${columnName} TIMESTAMPTZ NULL`;
+  }
+  
+  if (typeAndModifiers === 'tzn') {
+    return `  ${columnName} TIMESTAMPTZ NOT NULL DEFAULT NOW()`;
+  }
+  
+  // Handle default values - look for 'd' followed by quoted value
+  if (typeAndModifiers.includes(" d '")) {
+    const baseType = typeAndModifiers.split(" d '")[0];
+    const defaultValue = typeAndModifiers.split(" d '")[1].replace("'", "");
     
-    return `CREATE TABLE ${tableName} (\n  -- Generated from: ${shorthand}\n  id SERIAL PRIMARY KEY\n);`;
+    let sqlType = 'TEXT';
+    if (baseType === 'i' || baseType === 'in') {
+      sqlType = 'INT';
+    }
+    
+    const nullable = baseType.endsWith('n') ? 'NULL' : 'NOT NULL';
+    return `  ${columnName} ${sqlType} ${nullable} DEFAULT '${defaultValue}'`;
+  }
+  
+  // Default case - treat as raw SQL column definition
+  return `  ${columnName} ${typeAndModifiers}`;
 }
